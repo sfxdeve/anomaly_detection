@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+sqlalchemy
+asyncpg
+xgboost
+torch
+pandas
+scikit-learn
+pydantic
