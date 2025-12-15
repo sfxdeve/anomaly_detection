@@ -188,7 +188,7 @@ def render_home():
     # ------------------------------------------------------------------------
     st.header("Fraud Predictor") 
     
-    # Initialize session state for row and analysis
+    # Initialize session state for predictor
     if 'predictor_row' not in st.session_state:
         st.session_state.predictor_row = None
     if 'run_analysis' not in st.session_state:
@@ -197,29 +197,14 @@ def render_home():
     col_input, col_output = st.columns([1, 2])
     
     with col_input:        
-        # 1. Data Source Selection (Changing this MUST reset the row and analysis)
-        data_source = st.radio(
-            "Select Data Source:", 
-            ["Normal Data", "Fraud Data"], 
-            key="ds_radio", 
-            help="Choose transactions from a known set of normal or fraudulent samples.",
-            on_change=lambda: [
-                st.session_state.__setitem__('predictor_row', None), 
-                st.session_state.__setitem__('run_analysis', False)
-            ]
-        )
-        
+        # 1. Load Test Data
         try:
-            if data_source == "Normal Data":
-                df = pd.read_csv("src/normal.csv")
-            else:
-                df = pd.read_csv("src/fraud.csv")
+            df = pd.read_csv("src/test.csv")
         except FileNotFoundError:
-            st.error(f"Could not find {'src/normal.csv' if data_source == 'Normal Data' else 'src/fraud.csv'}. Ensure data files are present.")
+            st.error("Could not find src/test.csv. Ensure test data file is present.")
             return
 
         # 2. Transaction Generation
-        
         if st.button("Pick New Random Transaction", key="random_btn_home", use_container_width=True): 
             random_idx = np.random.randint(0, len(df))
             st.session_state.predictor_row = df.iloc[random_idx]
