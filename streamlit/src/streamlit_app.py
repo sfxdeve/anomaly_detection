@@ -2,9 +2,8 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import numpy as np
+
 
 # ============================================================================
 # Configuration
@@ -16,7 +15,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-API_BASE_URL = "https://sfxdeve-anomaly-detection-server.hf.space"
+API_BASE_URL = "http://localhost:8000"
+
 
 # ============================================================================
 # Custom CSS for Premium Design
@@ -81,6 +81,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
 # ============================================================================
 # Helper Functions (API Calls)
 # ============================================================================
@@ -102,7 +103,7 @@ def fetch_transactions(limit=100, class_filter=None):
     try:
         params = {"limit": limit}
         if class_filter is not None:
-            params["class_filter"] = class_filter
+            params["class"] = class_filter
         response = requests.get(f"{API_BASE_URL}/api/transactions", params=params, timeout=10)
         response.raise_for_status()
         return response.json()
@@ -111,23 +112,12 @@ def fetch_transactions(limit=100, class_filter=None):
         return []
 
 @st.cache_data(ttl=60)
-def fetch_recent_transactions(limit=50):
-    """Fetch recent transactions"""
-    try:
-        response = requests.get(f"{API_BASE_URL}/api/recent", params={"limit": limit}, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Error fetching recent transactions: {e}")
-        return []
-
-@st.cache_data(ttl=60)
-def fetch_amount_distribution(sample_size=1000):
+def fetch_amount_distribution(limit=1000):
     """Fetch amount distribution"""
     try:
         response = requests.get(
             f"{API_BASE_URL}/api/distributions/amount",
-            params={"sample_size": sample_size},
+            params={"limit": limit},
             timeout=10
         )
         response.raise_for_status()
@@ -137,27 +127,12 @@ def fetch_amount_distribution(sample_size=1000):
         return None
 
 @st.cache_data(ttl=60)
-def fetch_model_performance(sample_size=2000):
-    """Fetch model performance metrics"""
-    try:
-        response = requests.get(
-            f"{API_BASE_URL}/api/model/performance",
-            params={"sample_size": sample_size},
-            timeout=15
-        )
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Error fetching model performance: {e}")
-        return None
-
-@st.cache_data(ttl=60)
-def fetch_feature_distribution(feature_name, sample_size=1000):
+def fetch_feature_distribution(feature_name, limit=1000):
     """Fetch distribution for any feature"""
     try:
         response = requests.get(
             f"{API_BASE_URL}/api/distributions/feature/{feature_name}",
-            params={"sample_size": sample_size},
+            params={"limit": limit},
             timeout=10
         )
         response.raise_for_status()
@@ -243,7 +218,6 @@ def render_home():
             st.error(f"Could not find {'src/normal.csv' if data_source == 'Normal Data' else 'src/fraud.csv'}. Ensure data files are present.")
             return
 
-        
         # 2. Transaction Generation
         
         if st.button("Pick New Random Transaction", key="random_btn_home", use_container_width=True): 
@@ -257,11 +231,9 @@ def render_home():
 
         row = st.session_state.predictor_row
         
-        
         # 3. Prediction Button
         if st.button("RUN PREDICTION", type="primary", use_container_width=True, key="analyze_btn_home"): 
             st.session_state.run_analysis = True
-
 
     with col_output:
 
@@ -282,7 +254,6 @@ def render_home():
                     
                     prediction = result['Class']
                     
-                    
                     # 1. Display Prediction Result
                     if prediction == "1":
                         st.markdown('<h2 style="color: #ff4b4b; font-weight: 800; text-align: center;">FRAUD DETECTED</h2>', unsafe_allow_html=True)
@@ -297,7 +268,7 @@ def render_home():
         
         display_df = pd.DataFrame(row).T
         display_df['Amount'] = display_df['Amount'].apply(lambda x: f"${x:,.2f}")
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.dataframe(display_df, width="stretch", hide_index=True)
     
     st.divider()
 
@@ -321,14 +292,14 @@ def render_home():
         
         display_cols = ['id', 'Amount', 'Class'] + [col for col in df.columns if col.startswith('V')][:5]
         
-        st.dataframe(df[display_cols], use_container_width=True, height=400, hide_index=True)
+        st.dataframe(df[display_cols], width="stretch", height=400, hide_index=True)
         
         csv = df.to_csv(index=False)
         st.download_button("Export Data (CSV)", data=csv, file_name="fraud_transactions.csv", mime="text/csv", key="export_btn")
     else:
         st.info("No transactions available matching criteria")
 
-def render_data_analytics(sample_size):
+def render_data_analytics(limit):
     """Page 2: Data Analytics"""
     
     # KPI Section
@@ -351,7 +322,7 @@ def render_data_analytics(sample_size):
     # Distribution Analysis
     st.subheader("Transaction Pattern Analysis")
     
-    amount_dist = fetch_amount_distribution(sample_size=sample_size)
+    amount_dist = fetch_amount_distribution(limit=limit)
     
     if amount_dist:
         col1, col2 = st.columns(2)
@@ -393,7 +364,7 @@ def render_data_analytics(sample_size):
                 key="hist_feat_select"
             )
         
-        dist_data = fetch_feature_distribution(selected_feature, sample_size)
+        dist_data = fetch_feature_distribution(selected_feature, limit)
         
         if dist_data:
             c1, c2 = st.columns(2)
@@ -419,7 +390,7 @@ def render_data_analytics(sample_size):
         with c2:
             y_feat = st.selectbox("Y Axis", [f"V{i}" for i in range(1, 29)] + ["Amount"], index=1, key="scatter_y")
             
-        scatter_data = fetch_scatter_data(x_feat, y_feat, limit=2000)
+        scatter_data = fetch_scatter_data(x_feat, y_feat, limit=limit)
         if scatter_data and scatter_data.get('points'):
             df_scatter = pd.DataFrame(scatter_data['points'])
             df_scatter['Type'] = df_scatter['is_fraud'].map({True: 'Fraud', False: 'Normal'})
@@ -455,14 +426,14 @@ def render_data_analytics(sample_size):
         
         display_cols = ['id', 'Amount', 'Class'] + [col for col in df.columns if col.startswith('V')][:5]
         
-        st.dataframe(df[display_cols], use_container_width=True, height=400, hide_index=True)
+        st.dataframe(df[display_cols], width="stretch", height=400, hide_index=True)
         
         csv = df.to_csv(index=False)
         st.download_button("Export Data (CSV)", data=csv, file_name="fraud_transactions.csv", mime="text/csv", key="export_btn")
     else:
         st.info("No transactions available matching criteria")
 
-def render_model_analytics(sample_size):
+def render_model_analytics(limit):
     """Page 3: Model Analytics"""
     st.title("Model Performance")
     
@@ -558,14 +529,14 @@ def render_model_analytics(sample_size):
         # Create classification report dataframe
         report_data = {
             'Class': ['Normal (0)', 'Fraud (1)', 'Accuracy', 'Macro Avg', 'Weighted Avg'],
-            'Precision': [1.00, 0.92, '', 0.96, 1.00],
-            'Recall': [1.00, 0.85, '', 0.92, 1.00],
+            'Precision': [1.00, 0.92, None, 0.96, 1.00],
+            'Recall': [1.00, 0.85, None, 0.92, 1.00],
             'F1-Score': [1.00, 0.88, 1.00, 0.94, 1.00],
             'Support': [56864, 98, 56962, 56962, 56962]
         }
         df_report = pd.DataFrame(report_data)
         
-        st.dataframe(df_report, use_container_width=True, hide_index=True)
+        st.dataframe(df_report, width="stretch", hide_index=True)
         
         st.markdown("""
         **Key Insights:**
@@ -584,10 +555,10 @@ def main():
     # Sidebar Navigation
     with st.sidebar:
         st.title("Navigation")
-        page = st.radio("", ["Dashboard", "Data Intelligence", "Model Performance"])
+        page = st.radio("Main Menu", ["Dashboard", "Data Intelligence", "Model Performance"], label_visibility="collapsed")
                             
         # Global Parameters
-        sample_size = 5000 
+        limit = 5000 
         
         # Initialize session state for analysis button
         if 'run_analysis' not in st.session_state:
@@ -597,9 +568,9 @@ def main():
     if page == "Dashboard":
         render_home()
     elif page == "Data Intelligence":
-        render_data_analytics(sample_size)
+        render_data_analytics(limit)
     elif page == "Model Performance":
-        render_model_analytics(sample_size)
+        render_model_analytics(limit)
 
     st.markdown("---")
     st.markdown("""

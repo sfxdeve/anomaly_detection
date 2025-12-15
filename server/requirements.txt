@@ -1,9 +1,10 @@
-fastapi
-uvicorn
-sqlalchemy
 asyncpg
-xgboost
-torch
+fastapi
+greenlet
 pandas
-scikit-learn
 pydantic
+scikit-learn
+sqlalchemy
+torch
+uvicorn
+xgboost

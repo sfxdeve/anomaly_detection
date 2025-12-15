@@ -108,33 +108,3 @@ class ScatterPoint(BaseModel):
 
 class ScatterData(BaseModel):
     points: list[ScatterPoint]
-
-# --- Model Analytics Models ---
-
-class ModelMetrics(BaseModel):
-    accuracy: float
-    precision: float
-    recall: float
-    f1_score: float
-
-class ConfusionMatrix(BaseModel):
-    tn: int
-    fp: int
-    fn: int
-    tp: int
-
-class RocCurve(BaseModel):
-    fpr: list[float]
-    tpr: list[float]
-    auc: float
-
-class FeatureImportance(BaseModel):
-    feature: str
-    importance: float
-
-class ModelPerformance(BaseModel):
-    metrics: ModelMetrics
-    confusion_matrix: ConfusionMatrix
-    roc_curve: RocCurve
-    feature_importance: list[FeatureImportance]
-

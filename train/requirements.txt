@@ -1,8 +1,8 @@
-sqlalchemy
 asyncpg
 pandas
-scikit-learn
 psycopg2-binary
 pydantic
-xgboost
+scikit-learn
+sqlalchemy
 torch
+xgboost

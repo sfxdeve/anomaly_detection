@@ -137,4 +137,3 @@ class ModelPerformance(BaseModel):
     confusion_matrix: ConfusionMatrix
     roc_curve: RocCurve
     feature_importance: list[FeatureImportance]
-

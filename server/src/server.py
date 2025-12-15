@@ -1,18 +1,14 @@
-import pickle
-import logging
 from contextlib import asynccontextmanager
-from typing import List, Optional, Dict, Any
-
-import pandas as pd
-import torch
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
-from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
-    confusion_matrix, roc_curve, auc
-)
+from typing import List, Optional, Dict, Any
+import logging
+import pandas as pd
+import pickle
+import torch
+
 
 # Local Imports
 from src.db import init_db, get_db
@@ -25,13 +21,9 @@ from src.schemas import (
     TransactionStats,
     DistributionData,
     ScatterData,
-    ScatterPoint,
-    ModelPerformance,
-    ModelMetrics,
-    ConfusionMatrix,
-    RocCurve,
-    FeatureImportance
+    ScatterPoint
 )
+
 
 # ============================================================================
 # Configuration & Logging
@@ -48,6 +40,7 @@ models: Dict[str, Any] = {
     "autoencoder": None,
     "xgboost": None
 }
+
 
 # ============================================================================
 # Helper Functions
@@ -70,6 +63,7 @@ def _run_inference_pipeline(df: pd.DataFrame) -> pd.DataFrame:
     X_scaled_df['ReconstructionError'] = recon_error
     
     return X_scaled_df
+
 
 # ============================================================================
 # Application Lifecycle
@@ -109,6 +103,7 @@ async def lifespan(app: FastAPI):
     
     logger.info("Shutting down server...")
 
+
 # ============================================================================
 # FastAPI Application
 # ============================================================================
@@ -128,6 +123,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ============================================================================
 # API Endpoints: System
 # ============================================================================
@@ -143,6 +139,7 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "models_loaded": all(models.values())}
+
 
 # ============================================================================
 # API Endpoints: Analytics
@@ -172,42 +169,19 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
 @app.get("/api/transactions", response_model=List[TransactionResponse])
 async def get_transactions(
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
-    class_filter: Optional[str] = Query(None, regex="^(0|1)$"),
+    limit: int = Query(50, ge=1, le=1000),
+    class_: Optional[str] = Query(None, alias="class", regex="^(0|1)$"),
     db: AsyncSession = Depends(get_db)
 ):
     """Get paginated transactions with optional filtering."""
     query = select(TransactionTable).order_by(desc(TransactionTable.id))
     
-    if class_filter:
-        query = query.where(TransactionTable.Class == class_filter)
+    if class_:
+        query = query.where(TransactionTable.Class == class_)
     
     result = await db.execute(query.offset(skip).limit(limit))
     return result.scalars().all()
 
-@app.get("/api/recent", response_model=List[TransactionResponse])
-async def get_recent_transactions(
-    limit: int = Query(50, ge=1, le=500),
-    db: AsyncSession = Depends(get_db)
-):
-    """Get most recent transactions."""
-    query = select(TransactionTable).order_by(desc(TransactionTable.id)).limit(limit)
-    result = await db.execute(query)
-    return result.scalars().all()
-
-@app.get("/api/anomalies", response_model=List[TransactionResponse])
-async def get_anomalies(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=500),
-    db: AsyncSession = Depends(get_db)
-):
-    """Get confirmed fraud transactions only."""
-    query = select(TransactionTable).where(
-        TransactionTable.Class == "1"
-    ).order_by(desc(TransactionTable.id)).offset(skip).limit(limit)
-    
-    result = await db.execute(query)
-    return result.scalars().all()
 
 # ============================================================================
 # API Endpoints: Visualizations
@@ -215,14 +189,14 @@ async def get_anomalies(
 
 @app.get("/api/distributions/amount", response_model=DistributionData)
 async def get_amount_distribution(
-    sample_size: int = Query(1000, ge=100, le=10000),
+    limit: int = Query(1000, ge=100, le=10000),
     db: AsyncSession = Depends(get_db)
 ):
     """Get amount distribution for fraud vs normal transactions."""
     def _get_query(class_label):
         return select(TransactionTable.Amount).where(
             TransactionTable.Class == class_label
-        ).limit(sample_size)
+        ).limit(limit)
 
     fraud_res = await db.execute(_get_query("1"))
     normal_res = await db.execute(_get_query("0"))
@@ -235,7 +209,7 @@ async def get_amount_distribution(
 @app.get("/api/distributions/feature/{feature_name}", response_model=DistributionData)
 async def get_feature_distribution(
     feature_name: str,
-    sample_size: int = Query(1000, ge=100, le=10000),
+    limit: int = Query(1000, ge=100, le=10000),
     db: AsyncSession = Depends(get_db)
 ):
     """Get distribution for a specific V-feature."""
@@ -247,7 +221,7 @@ async def get_feature_distribution(
     def _get_query(class_label):
         return select(feature_col).where(
             TransactionTable.Class == class_label
-        ).limit(sample_size)
+        ).limit(limit)
     
     fraud_res = await db.execute(_get_query("1"))
     normal_res = await db.execute(_get_query("0"))
@@ -261,7 +235,7 @@ async def get_feature_distribution(
 async def get_scatter_data(
     x_feature: str,
     y_feature: str,
-    limit: int = Query(1000, ge=100, le=5000),
+    limit: int = Query(1000, ge=100, le=10000),
     db: AsyncSession = Depends(get_db)
 ):
     """Get scatter plot data comparing two features."""
@@ -290,82 +264,10 @@ async def get_scatter_data(
     
     return ScatterData(points=fraud_points + normal_points)
 
+
 # ============================================================================
 # API Endpoints: Machine Learning
 # ============================================================================
-
-@app.get("/api/model/performance", response_model=ModelPerformance)
-async def get_model_performance(
-    sample_size: int = Query(2000, ge=100, le=5000),
-    db: AsyncSession = Depends(get_db)
-):
-    """Calculate model performance metrics on a sample of database data."""
-    if not all(models.values()):
-        raise HTTPException(status_code=503, detail="Models not loaded")
-        
-    # Fetch balanced sample
-    fraud_limit = sample_size // 2
-    normal_limit = sample_size - fraud_limit
-    
-    fraud_res = await db.execute(select(TransactionTable).where(TransactionTable.Class == "1").limit(fraud_limit))
-    normal_res = await db.execute(select(TransactionTable).where(TransactionTable.Class == "0").limit(normal_limit))
-    
-    fraud_txs = fraud_res.scalars().all()
-    normal_txs = normal_res.scalars().all()
-    all_txs = fraud_txs + normal_txs
-    
-    if not all_txs:
-        raise HTTPException(status_code=404, detail="No data available for evaluation")
-        
-    # Convert SQLAlchemy objects to DataFrame efficiently
-    data_dicts = []
-    y_true = []
-    for tx in all_txs:
-        # Extract only valid features to avoid sqlalchemy state or ID columns
-        row = {col: getattr(tx, col) for col in VALID_FEATURES}
-        data_dicts.append(row)
-        y_true.append(int(tx.Class))
-        
-    df = pd.DataFrame(data_dicts)
-    
-    # Run Pipeline
-    X_prepared = _run_inference_pipeline(df)
-    
-    # Prediction
-    xgb_model = models["xgboost"]
-    y_pred = xgb_model.predict(X_prepared)
-    y_prob = xgb_model.predict_proba(X_prepared)
-    
-    # Calculate Metrics
-    metrics = ModelMetrics(
-        accuracy=float(accuracy_score(y_true, y_pred)),
-        precision=float(precision_score(y_true, y_pred, zero_division=0)),
-        recall=float(recall_score(y_true, y_pred, zero_division=0)),
-        f1_score=float(f1_score(y_true, y_pred, zero_division=0))
-    )
-    
-    # Confusion Matrix
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-    
-    # ROC Curve
-    fpr, tpr, _ = roc_curve(y_true, y_prob)
-    roc_auc = auc(fpr, tpr)
-    
-    # Feature Importance (Top 10)
-    importance_dict = xgb_model.model.get_booster().get_score(importance_type='gain')
-    total_imp = sum(importance_dict.values()) or 1.0
-    
-    feat_imp = [
-        FeatureImportance(feature=k, importance=v/total_imp)
-        for k, v in sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)[:10]
-    ]
-    
-    return ModelPerformance(
-        metrics=metrics,
-        confusion_matrix=ConfusionMatrix(tn=int(tn), fp=int(fp), fn=int(fn), tp=int(tp)),
-        roc_curve=RocCurve(fpr=fpr.tolist(), tpr=tpr.tolist(), auc=float(roc_auc)),
-        feature_importance=feat_imp
-    )
 
 @app.post("/api/predict", response_model=TransactionResponse)
 async def predict_transaction(
