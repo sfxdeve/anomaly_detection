@@ -108,3 +108,12 @@ class ScatterPoint(BaseModel):
 
 class ScatterData(BaseModel):
     points: list[ScatterPoint]
+
+class FeatureContribution(BaseModel):
+    feature: str
+    value: float  # The feature value
+    contribution: float  # The SHAP value
+
+class ExplanationResponse(BaseModel):
+    base_value: float
+    contributions: list[FeatureContribution]

@@ -4,6 +4,7 @@ greenlet
 pandas
 pydantic
 scikit-learn
+shap
 sqlalchemy
 torch
 uvicorn

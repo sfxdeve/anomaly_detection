@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import time
 
 
@@ -156,6 +157,17 @@ def fetch_scatter_data(x_feature, y_feature, limit=1000):
         st.error(f"Error fetching scatter data: {e}")
         return None
 
+@st.cache_data(ttl=60)
+def fetch_explanation(payload):
+    """Fetch SHAP explanation for a transaction"""
+    try:
+        response = requests.post(f"{API_BASE_URL}/api/explain", json=payload, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        st.error(f"Error fetching explanation: {e}")
+        return None
+
 
 # ============================================================================
 # Reusable UI Components
@@ -234,6 +246,8 @@ def render_home():
         st.session_state.transactions_processed = 0
     if 'frauds_detected' not in st.session_state:
         st.session_state.frauds_detected = 0
+    if 'latest_amount' not in st.session_state:
+        st.session_state.latest_amount = 0.0
     
     # Load test data once
     try:
@@ -244,28 +258,35 @@ def render_home():
         st.error("Could not find src/test.csv. Ensure test data file is present.")
         return
     
-    # Minimal Control Panel
-    col_btn1, col_btn2, col_stat1, col_stat2 = st.columns([1, 1, 1, 1])
+    # Control Panel & Metrics Layout
+    col_controls, col_spacer, col_stat1, col_stat2, col_stat3 = st.columns([1, 0.5, 1, 1, 1])
     
-    with col_btn1:
+    with col_controls:
+        # Stack buttons vertically
         if st.button("START" if not st.session_state.simulator_running else "PAUSE", 
                     type="primary", use_container_width=True, key="toggle_sim"):
             st.session_state.simulator_running = not st.session_state.simulator_running
-    
-    with col_btn2:
+            
         if st.button("RESET", use_container_width=True, key="reset_sim"):
             st.session_state.current_index = 0
             st.session_state.transactions_processed = 0
             st.session_state.frauds_detected = 0
+            st.session_state.latest_amount = 0.0
             st.session_state.simulator_running = False
+    
+    # calc metrics
+    fraud_rate = (st.session_state.frauds_detected / max(st.session_state.transactions_processed, 1) * 100)
     
     with col_stat1:
         st.metric("Processed", st.session_state.transactions_processed)
     
     with col_stat2:
         st.metric("Frauds", st.session_state.frauds_detected, 
-                 delta=f"{(st.session_state.frauds_detected / max(st.session_state.transactions_processed, 1) * 100):.1f}%",
+                 delta=f"{fraud_rate:.1f}%",
                  delta_color="inverse")
+                 
+    with col_stat3:
+        st.metric("Last Amount", f"${st.session_state.latest_amount:.2f}")
     
     
     # Realtime Simulator Logic
@@ -294,6 +315,7 @@ def render_home():
             
             # Update statistics
             st.session_state.transactions_processed += 1
+            st.session_state.latest_amount = row["Amount"]
             if prediction == "1":
                 st.session_state.frauds_detected += 1
             
@@ -309,10 +331,88 @@ def render_home():
         # Force refresh to continue simulation
         st.rerun()
     
+        st.rerun()
+    
     st.divider()
 
     # Recent Transactions
     display_recent_transactions()
+
+    st.divider()
+
+
+    # ------------------------------------------------------------------------
+    # ANOMALY EXPLANATION
+    # ------------------------------------------------------------------------
+    st.subheader("Explainable AI")
+    
+    col_exp1, col_exp2 = st.columns([1, 2])
+    
+    with col_exp1:
+        # Filter mostly for fraud to be interesting
+        recent_frauds = fetch_transactions(limit=50)
+        
+        if recent_frauds:
+            selected_txn_id = st.selectbox(
+                "Select Transaction", 
+                options=[t['id'] for t in recent_frauds],
+                format_func=lambda x: f"Transaction #{x}"
+            )
+            
+            # Find the selected transaction data
+            selected_txn = next((t for t in recent_frauds if t['id'] == selected_txn_id), None)
+            
+            if selected_txn and st.button("Explain Prediction", type="primary", use_container_width=True):
+                # Prepare payload (remove ID/Class, keep features)
+                payload = {k: v for k, v in selected_txn.items() if k in [f"V{i}" for i in range(1, 29)] + ["Amount"]}
+                
+                with st.spinner("Calculating SHAP values..."):
+                    explanation = fetch_explanation(payload)
+                    
+                if explanation:
+                    st.session_state.current_explanation = explanation
+                    st.session_state.explained_txn_id = selected_txn_id
+        else:
+            st.warning("No recent fraud transactions found to explain.")
+
+    with col_exp2:
+        if 'current_explanation' in st.session_state:
+            exp = st.session_state.current_explanation
+            
+            base_val = exp['base_value']
+            contribs = exp['contributions']
+            
+            # Prepare data for Waterfall
+            # Sort by absolute contribution, take top 10
+            top_contribs = sorted(contribs, key=lambda x: abs(x['contribution']), reverse=True)[:10]
+            
+            feats = [c['feature'] for c in top_contribs]
+            vals = [c['contribution'] for c in top_contribs]
+            text_vals = [f"{c['value']:.2f}" for c in top_contribs]
+            
+            # Add "Other" if needed, but waterfall is tricky with "Other". 
+            # Let's just show top 10 impactful features.
+            
+            fig_waterfall = go.Figure(go.Waterfall(
+                orientation = "h",
+                measure = ["relative"] * len(feats),
+                x = vals,
+                y = feats,
+                text = text_vals,
+                textposition = "outside",
+                connector = {"line":{"color":"rgb(63, 63, 63)"}},
+            ))
+            
+            fig_waterfall.update_layout(
+                title=f"Feature Contributions (Base Value: {base_val:.2f})",
+                template='plotly_dark',
+                height=500,
+                xaxis_title="SHAP Value (Impact on Log-Odds)",
+                yaxis_title="Feature"
+            )
+            
+            st.plotly_chart(fig_waterfall, use_container_width=True)
+
 
 def render_data_analytics(limit):
     """Page 2: Data Analytics"""

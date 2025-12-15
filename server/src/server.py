@@ -21,8 +21,11 @@ from src.schemas import (
     TransactionStats,
     DistributionData,
     ScatterData,
-    ScatterPoint
+    ScatterPoint,
+    ExplanationResponse,
+    FeatureContribution
 )
+import shap
 
 
 # ============================================================================
@@ -38,7 +41,9 @@ VALID_FEATURES = [f"V{i}" for i in range(1, 29)] + ["Amount"]
 models: Dict[str, Any] = {
     "scaler": None,
     "autoencoder": None,
-    "xgboost": None
+    "autoencoder": None,
+    "xgboost": None,
+    "explainer": None
 }
 
 
@@ -90,7 +95,13 @@ async def lifespan(app: FastAPI):
         models["autoencoder"].eval()
         
         models["xgboost"] = XGBoostModel()
+        models["xgboost"] = XGBoostModel()
         models["xgboost"].load("models/xgboost.json")
+        
+        # Initialize SHAP explainer
+        # We need the underlying booster/sklearn model
+        logger.info("Initializing SHAP explainer...")
+        models["explainer"] = shap.TreeExplainer(models["xgboost"].model)
         
         logger.info("Models loaded successfully")
     except FileNotFoundError as e:
@@ -299,6 +310,69 @@ async def predict_transaction(
     await db.refresh(db_transaction)
     
     return db_transaction
+
+@app.post("/api/explain", response_model=ExplanationResponse)
+async def explain_transaction(
+    transaction: TransactionCreate,
+):
+    """Explain fraud prediction for a single transaction using SHAP."""
+    if not all([models["scaler"], models["autoencoder"], models["xgboost"], models["explainer"]]):
+        raise HTTPException(status_code=503, detail="Models or explainer not loaded")
+        
+    # Convert input to DataFrame
+    input_data = transaction.model_dump()
+    df = pd.DataFrame([input_data])
+    
+    # Run Pipeline to get transformed features (same as used for prediction)
+    X_prepared = _run_inference_pipeline(df)
+    
+    # Calculate SHAP values
+    explainer = models["explainer"]
+    shap_values = explainer.shap_values(X_prepared)
+    
+    # shap_values for binary classification might be a list or array depending on version/model
+    # For XGBClassifier binary, it usually returns values for the positive class (log odds?) or raw output.
+    # TreeExplainer with XGBoost often returns margin (log odds).
+    
+    # Handle array shape
+    if isinstance(shap_values, list):
+        # Binary case often returns list of [negative_shap, positive_shap] for some versions, 
+        # or just one array. Let's assume standard behavior for latest shap/bi-classifier:
+        # It typically returns a single array for binary classification if simply called on X.
+        # But if it is a list (multiclass), take index 1 (fraud).
+        vals = shap_values[1] if len(shap_values) > 1 else shap_values[0]
+    else:
+        vals = shap_values 
+        
+    # Extract values for the single row
+    if len(vals.shape) > 1:
+        row_values = vals[0]
+    else:
+        row_values = vals
+
+    # Base value (expected value)
+    base_value = explainer.expected_value
+    if isinstance(base_value, list) or (hasattr(base_value, "shape") and base_value.shape):
+        base_value = base_value[-1] # Positive class
+        
+    # Construct response
+    contributions = []
+    feature_names = X_prepared.columns.tolist()
+    
+    for i, feature in enumerate(feature_names):
+        contributions.append(FeatureContribution(
+            feature=feature,
+            value=float(X_prepared.iloc[0, i]),
+            contribution=float(row_values[i])
+        ))
+        
+    # Sort by absolute contribution (optional, but good for client consumption limits if needed)
+    contributions.sort(key=lambda x: abs(x.contribution), reverse=True)
+    
+    return ExplanationResponse(
+        base_value=float(base_value),
+        contributions=contributions
+    )
 
 if __name__ == "__main__":
     import uvicorn
