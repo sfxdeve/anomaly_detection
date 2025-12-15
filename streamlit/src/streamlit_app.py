@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
-import numpy as np
+import time
 
 
 # ============================================================================
@@ -55,7 +55,7 @@ st.markdown("""
     
     /* Sidebar */
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 10epx);
+        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
     }
     
     /* Divider */
@@ -158,20 +158,11 @@ def fetch_scatter_data(x_feature, y_feature, limit=1000):
 
 
 # ============================================================================
-# Page Views
+# Reusable UI Components
 # ============================================================================
 
-def render_home():
-    """Page 1: Dashboard (Executive Overview & Predictor)"""
-    st.title("Dashboard") 
-    
-    # ------------------------------------------------------------------------
-    # EXECUTIVE OVERVIEW (STATS)
-    # ------------------------------------------------------------------------
-    st.subheader("Transaction Anomaly Monitoring & Analysis")
-    
-    stats = fetch_stats()
-    
+def display_metrics(stats):
+    """Display the 4 key metrics"""
     if stats:
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total Volume", f"{stats['total_transactions']:,}")
@@ -180,84 +171,9 @@ def render_home():
         col4.metric("Current Fraud Rate", f"{stats['fraud_rate']:.3f}%", delta_color="inverse")
     else:
         st.warning("Unable to fetch statistics. Please ensure the API server is running.")
-    
-    st.markdown("---")
-    
-    # ------------------------------------------------------------------------
-    # FRAUD PREDICTOR
-    # ------------------------------------------------------------------------
-    st.header("Fraud Predictor") 
-    
-    # Initialize session state for predictor
-    if 'predictor_row' not in st.session_state:
-        st.session_state.predictor_row = None
-    if 'run_analysis' not in st.session_state:
-        st.session_state.run_analysis = False
-    
-    col_input, col_output = st.columns([1, 2])
-    
-    with col_input:        
-        # 1. Load Test Data
-        try:
-            df = pd.read_csv("src/test.csv")
-        except FileNotFoundError:
-            st.error("Could not find src/test.csv. Ensure test data file is present.")
-            return
 
-        # 2. Transaction Generation
-        if st.button("Pick New Random Transaction", key="random_btn_home", use_container_width=True): 
-            random_idx = np.random.randint(0, len(df))
-            st.session_state.predictor_row = df.iloc[random_idx]
-            st.session_state.run_analysis = False 
-        
-        if st.session_state.predictor_row is None:
-            random_idx = np.random.randint(0, len(df))
-            st.session_state.predictor_row = df.iloc[random_idx]
-
-        row = st.session_state.predictor_row
-        
-        # 3. Prediction Button
-        if st.button("RUN PREDICTION", type="primary", use_container_width=True, key="analyze_btn_home"): 
-            st.session_state.run_analysis = True
-
-    with col_output:
-
-        # Output Logic
-        if st.session_state.get('run_analysis', False):
-            # Use a unique key for the spinner to prevent Streamlit warnings/issues
-            with st.spinner("Analyzing transaction patterns..."):
-                try:
-                    # Prepare payload
-                    payload = {f"V{i}": row[f"V{i}"] for i in range(1, 29)}
-                    if 'Time' in row:
-                        payload['Time'] = row['Time']
-                    payload["Amount"] = row["Amount"]
-                    
-                    response = requests.post(f"{API_BASE_URL}/api/predict", json=payload)
-                    response.raise_for_status()
-                    result = response.json()
-                    
-                    prediction = result['Class']
-                    
-                    # 1. Display Prediction Result
-                    if prediction == "1":
-                        st.markdown('<h2 style="color: #ff4b4b; font-weight: 800; text-align: center;">FRAUD DETECTED</h2>', unsafe_allow_html=True)
-                    else:
-                        st.markdown('<h2 style="color: #00cc88; font-weight: 800; text-align: center;">LEGITIMATE TRANSACTION</h2>', unsafe_allow_html=True)
-                        
-                except Exception as e:
-                    st.error(f"Prediction failed: {e}. Check API connection and payload structure.")
-                    st.session_state.run_analysis = False
-        
-        # 2. Display the selected transaction data immediately below
-        
-        display_df = pd.DataFrame(row).T
-        display_df['Amount'] = display_df['Amount'].apply(lambda x: f"${x:,.2f}")
-        st.dataframe(display_df, width="stretch", hide_index=True)
-    
-    st.divider()
-
-    # Recent Transactions
+def display_recent_transactions():
+    """Display recent transactions table with filters"""
     st.subheader("Recent Transactions")
     
     col1, col2 = st.columns([3, 1])
@@ -284,6 +200,120 @@ def render_home():
     else:
         st.info("No transactions available matching criteria")
 
+
+
+# ============================================================================
+# Page Views
+# ============================================================================
+
+def render_home():
+    """Page 1: Dashboard (Executive Overview & Predictor)"""
+    st.title("Dashboard") 
+    
+    # ------------------------------------------------------------------------
+    # EXECUTIVE OVERVIEW (STATS)
+    # ------------------------------------------------------------------------
+    st.subheader("Transaction Anomaly Monitoring & Analysis")
+    
+    stats = fetch_stats()
+    display_metrics(stats)
+    
+    st.markdown("---")
+    
+    # ------------------------------------------------------------------------
+    # REALTIME FRAUD PREDICTOR SIMULATOR
+    # ------------------------------------------------------------------------
+    st.header("Live Transaction Monitor") 
+    
+    # Initialize session state for realtime simulator
+    if 'simulator_running' not in st.session_state:
+        st.session_state.simulator_running = False
+    if 'current_index' not in st.session_state:
+        st.session_state.current_index = 0
+    if 'transactions_processed' not in st.session_state:
+        st.session_state.transactions_processed = 0
+    if 'frauds_detected' not in st.session_state:
+        st.session_state.frauds_detected = 0
+    
+    # Load test data once
+    try:
+        if 'test_data' not in st.session_state:
+            st.session_state.test_data = pd.read_csv("src/test.csv")
+        df = st.session_state.test_data
+    except FileNotFoundError:
+        st.error("Could not find src/test.csv. Ensure test data file is present.")
+        return
+    
+    # Minimal Control Panel
+    col_btn1, col_btn2, col_stat1, col_stat2 = st.columns([1, 1, 1, 1])
+    
+    with col_btn1:
+        if st.button("START" if not st.session_state.simulator_running else "PAUSE", 
+                    type="primary", use_container_width=True, key="toggle_sim"):
+            st.session_state.simulator_running = not st.session_state.simulator_running
+    
+    with col_btn2:
+        if st.button("RESET", use_container_width=True, key="reset_sim"):
+            st.session_state.current_index = 0
+            st.session_state.transactions_processed = 0
+            st.session_state.frauds_detected = 0
+            st.session_state.simulator_running = False
+    
+    with col_stat1:
+        st.metric("Processed", st.session_state.transactions_processed)
+    
+    with col_stat2:
+        st.metric("Frauds", st.session_state.frauds_detected, 
+                 delta=f"{(st.session_state.frauds_detected / max(st.session_state.transactions_processed, 1) * 100):.1f}%",
+                 delta_color="inverse")
+    
+    
+    # Realtime Simulator Logic
+    if st.session_state.simulator_running:
+        
+        # Check if we've reached the end of the dataset
+        if st.session_state.current_index >= len(df):
+            st.session_state.simulator_running = False
+            st.success(f"Simulation complete! Processed all {len(df)} transactions.")
+            st.rerun()
+        
+        row = df.iloc[st.session_state.current_index]
+        
+        # Run prediction
+        try:
+            # Prepare payload
+            payload = {f"V{i}": row[f"V{i}"] for i in range(1, 29)}
+            payload["Amount"] = row["Amount"]
+            
+            # Make prediction
+            response = requests.post(f"{API_BASE_URL}/api/predict", json=payload, timeout=5)
+            response.raise_for_status()
+            result = response.json()
+            
+            prediction = result['Class']
+            
+            # Update statistics
+            st.session_state.transactions_processed += 1
+            if prediction == "1":
+                st.session_state.frauds_detected += 1
+            
+        except Exception as e:
+            st.error(f"Prediction failed: {e}")
+        
+        # Move to next transaction
+        st.session_state.current_index += 1
+        
+        # Wait 1 second between transactions
+        time.sleep(1.0)
+        
+        # Force refresh to continue simulation
+        st.rerun()
+    
+    st.divider()
+
+    # Recent Transactions
+    display_recent_transactions()
+
 def render_data_analytics(limit):
     """Page 2: Data Analytics"""
     
@@ -292,15 +322,7 @@ def render_data_analytics(limit):
     st.subheader("Transaction Anomaly Monitoring & Analysis")
     
     stats = fetch_stats()
-    
-    if stats:
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Volume", f"{stats['total_transactions']:,}")
-        col2.metric("Detected Threats", f"{stats['fraud_count']:,}", f"{stats['fraud_rate']:.3f}%", delta_color="inverse")
-        col3.metric("Verified Legitimate", f"{stats['normal_count']:,}")
-        col4.metric("Current Fraud Rate", f"{stats['fraud_rate']:.3f}%", delta_color="inverse")
-    else:
-        st.warning("Unable to fetch statistics. Please ensure the API server is running.")
+    display_metrics(stats)
     
     st.divider()
 
@@ -392,31 +414,7 @@ def render_data_analytics(limit):
     st.divider()
 
     # Recent Transactions
-    st.subheader("Recent Transactions")
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        transaction_limit = st.slider("Rows to fetch", 10, 200, 50, 10, key="txn_limit_slider")
-    with col2:
-        class_filter_option = st.selectbox("Filter Scope", ["All", "Fraud Only", "Normal Only"], key="txn_filter_select")
-    
-    class_filter = "1" if class_filter_option == "Fraud Only" else "0" if class_filter_option == "Normal Only" else None
-    
-    transactions = fetch_transactions(limit=transaction_limit, class_filter=class_filter)
-    
-    if transactions:
-        df = pd.DataFrame(transactions)
-        df['Class'] = df['Class'].map({'0': 'Normal', '1': 'Fraud'})
-        df['Amount'] = df['Amount'].apply(lambda x: f"${x:.2f}")
-        
-        display_cols = ['id', 'Amount', 'Class'] + [col for col in df.columns if col.startswith('V')][:5]
-        
-        st.dataframe(df[display_cols], width="stretch", height=400, hide_index=True)
-        
-        csv = df.to_csv(index=False)
-        st.download_button("Export Data (CSV)", data=csv, file_name="fraud_transactions.csv", mime="text/csv", key="export_btn")
-    else:
-        st.info("No transactions available matching criteria")
+    display_recent_transactions()
 
 def render_model_analytics(limit):
     """Page 3: Model Analytics"""
